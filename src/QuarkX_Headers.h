@@ -28,7 +28,8 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace quarkx {
+namespace quarkx
+{
 
 #ifndef QUARKX_HDR_LINE_MAX
 #define QUARKX_HDR_LINE_MAX 512
@@ -39,46 +40,48 @@ namespace quarkx {
 #endif
 
 #ifndef QUARKX_HDR_NAME_MAX
-#define QUARKX_HDR_NAME_MAX 24
+#define QUARKX_HDR_NAME_MAX 48
 #endif
 
 #ifndef QUARKX_HDR_VALUE_MAX
-#define QUARKX_HDR_VALUE_MAX 64
+#define QUARKX_HDR_VALUE_MAX 160
 #endif
 
 #ifndef QUARKX_HEADER_MAX_COUNT
-#define QUARKX_HEADER_MAX_COUNT 8
+#define QUARKX_HEADER_MAX_COUNT 16
 #endif
 
-struct Header {
-  char name[QUARKX_HDR_NAME_MAX];
-  char value[QUARKX_HDR_VALUE_MAX];
-};
+  struct Header
+  {
+    char name[QUARKX_HDR_NAME_MAX];
+    char value[QUARKX_HDR_VALUE_MAX];
+  };
 
-struct HeaderTable {
-  Header items[QUARKX_HEADER_MAX_COUNT];
-  std::size_t count;
-};
+  struct HeaderTable
+  {
+    Header items[QUARKX_HEADER_MAX_COUNT];
+    std::size_t count;
+  };
 
-using HeaderRecvFn = int (*)(void *ctx, uint8_t *buf, std::size_t len);
+  using HeaderRecvFn = int (*)(void *ctx, uint8_t *buf, std::size_t len);
 
-/**
- * @brief Parse HTTP header fields using the provided reader callback.
- * @param reader Function used to pull bytes from the underlying transport.
- * @param ctx Opaque context passed to the reader.
- * @param ht Table to populate; any previous contents are cleared.
- * @return true on success, false on overflow or socket failure.
- */
-bool parse_headers(HeaderRecvFn reader, void *ctx, HeaderTable &ht);
+  /**
+   * @brief Parse HTTP header fields using the provided reader callback.
+   * @param reader Function used to pull bytes from the underlying transport.
+   * @param ctx Opaque context passed to the reader.
+   * @param ht Table to populate; any previous contents are cleared.
+   * @return true on success, false on overflow or socket failure.
+   */
+  bool parse_headers(HeaderRecvFn reader, void *ctx, HeaderTable &ht);
 
-/**
- * @brief Retrieve a header value by case-insensitive name.
- * @param ht Header table to search.
- * @param name Header name (ASCII).
- * @return Pointer to the stored value, or nullptr if not found/too long.
- */
-const char *get_header(const HeaderTable &ht, const char *name);
+  /**
+   * @brief Retrieve a header value by case-insensitive name.
+   * @param ht Header table to search.
+   * @param name Header name (ASCII).
+   * @return Pointer to the stored value, or nullptr if not found/too long.
+   */
+  const char *get_header(const HeaderTable &ht, const char *name);
 
-}  // namespace quarkx
+} // namespace quarkx
 
-#endif  // QUARKX_HEADERS_H
+#endif // QUARKX_HEADERS_H

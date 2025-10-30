@@ -104,20 +104,26 @@ bool add_header(HeaderTable &ht, const char *line) {
   }
 
   if (!std::strchr(line, ':')) {
+#if QUARKX_LOG_LEVEL >= 3
     Serial.print(F("[D] skip header line: "));
     Serial.println(line);
+#endif
     return true;
   }
 
   if (ht.count >= QUARKX_HEADER_MAX_COUNT) {
+#if QUARKX_LOG_LEVEL >= 1
     Serial.println(F("[E] header table full"));
+#endif
     return false;
   }
 
   Header &slot = ht.items[ht.count];
   if (!extract_tokens(line, slot.name, slot.value)) {
+#if QUARKX_LOG_LEVEL >= 1
     Serial.print(F("[E] header token parse failed: "));
     Serial.println(line);
+#endif
     return false;
   }
 
