@@ -44,7 +44,7 @@ namespace quarkx
 #endif
 
 #ifndef QUARKX_HDR_VALUE_MAX
-#define QUARKX_HDR_VALUE_MAX 160
+#define QUARKX_HDR_VALUE_MAX 210
 #endif
 
 #ifndef QUARKX_HEADER_MAX_COUNT
