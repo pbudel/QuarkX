@@ -48,7 +48,7 @@ namespace quarkx
 #endif
 
 #ifndef QUARKX_HEADER_MAX_COUNT
-#define QUARKX_HEADER_MAX_COUNT 16
+#define QUARKX_HEADER_MAX_COUNT 24
 #endif
 
   struct Header

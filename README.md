@@ -69,8 +69,8 @@ Every build-time option can be overridden with `-D` flags in `platformio.ini` or
 | `QUARKX_MAX_BODY` | `512` | Maximum request body size buffered for handlers (`read_body`). |
 | `QUARKX_HDR_LINE_MAX` | `512` | Maximum header line length accepted by the parser. |
 | `QUARKX_HDR_NAME_MAX` | `48` | Maximum header field name length stored in the table. |
-| `QUARKX_HDR_VALUE_MAX` | `160` | Maximum header field value length stored in the table. |
-| `QUARKX_HEADER_MAX_COUNT` | `16` | Maximum number of headers parsed per request. |
+| `QUARKX_HDR_VALUE_MAX` | `210` | Maximum header field value length stored in the table. |
+| `QUARKX_HEADER_MAX_COUNT` | `24` | Maximum number of headers parsed per request. |
 | `QUARKX_ROUTE_MAX` | `8` | Number of exact-match route slots. |
 | `QUARKX_PREFIX_MAX` | `4` | Number of prefix-route slots. |
 | `QUARKX_LOG_LEVEL` | `1` | Log level (`0`=silent, `1`=error, `2`=info, `3`=debug). |
