@@ -3,6 +3,8 @@
 #include <WiFi.h>
 
 #include <QuarkX.h>
+#include <cstring>
+#include <mbedtls/certs.h>
 
 #ifndef QUARKX_WIFI_SSID
 #define QUARKX_WIFI_SSID "YOUR_WIFI_SSID"
