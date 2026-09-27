@@ -410,6 +410,65 @@ namespace quarkx
              ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)) == 0;
     }
 
+    // Bounds the reading of one request. Waiting for its first byte is
+    // limited by the socket timeout (`idle_ms`); once it has started, the
+    // request line, headers and body must all arrive within
+    // QUARKX_REQUEST_TIMEOUT_MS, so a client trickling bytes cannot hold the
+    // server indefinitely.
+    class RequestReader : public Transport
+    {
+    public:
+      RequestReader(Transport &inner, int fd, int idle_ms)
+          : _inner(inner), _fd(fd), _deadline(QUARKX_REQUEST_TIMEOUT_MS),
+            _started(false), _idleAdjusted(idle_ms != QUARKX_RECV_TIMEOUT_MS)
+      {
+        if (_idleAdjusted)
+        {
+          set_socket_timeout(_fd, idle_ms);
+        }
+      }
+
+      ~RequestReader() override { _restoreTimeout(); }
+
+      int recv(uint8_t *buf, size_t len) override
+      {
+        if (_started && _deadline.expired())
+        {
+          QX_LOGD("Request not received within %d ms", QUARKX_REQUEST_TIMEOUT_MS);
+          return -1;
+        }
+        const int ret = _inner.recv(buf, len);
+        if (ret > 0 && !_started)
+        {
+          _started = true;
+          _deadline = Deadline(QUARKX_REQUEST_TIMEOUT_MS);
+          _restoreTimeout();
+        }
+        return ret;
+      }
+
+      int send(const uint8_t *buf, size_t len) override
+      {
+        return _inner.send(buf, len);
+      }
+
+    private:
+      void _restoreTimeout()
+      {
+        if (_idleAdjusted)
+        {
+          set_socket_timeout(_fd, QUARKX_RECV_TIMEOUT_MS);
+          _idleAdjusted = false;
+        }
+      }
+
+      Transport &_inner;
+      int _fd;
+      Deadline _deadline;
+      bool _started;
+      bool _idleAdjusted;
+    };
+
     int close_socket(int fd)
     {
       return ::close(fd);
@@ -442,6 +501,7 @@ namespace quarkx
   using detail::g_active_server;
   using detail::PlainTransport;
   using detail::receive_exact;
+  using detail::RequestReader;
   using detail::ScopedServerBody;
   using detail::set_socket_blocking;
   using detail::set_socket_nonblock;
@@ -885,9 +945,10 @@ namespace quarkx
 
   void Server::_serveClient(int client_fd)
   {
-    auto process_request = [&](Transport &transport, detail::StreamWrapper &stream,
-                               bool allow_keep) -> bool
+    auto process_request = [&](Transport &conn, detail::StreamWrapper &stream,
+                               bool allow_keep, int idle_ms) -> bool
     {
+      RequestReader transport(conn, client_fd, idle_ms);
       String method;
       String path;
       if (!_readRequestLine(transport, method, path))
@@ -923,6 +984,7 @@ namespace quarkx
           else
           {
             QX_LOGD("Failed reading body");
+            return false;
           }
         }
         else if (len > QUARKX_MAX_BODY)
@@ -938,7 +1000,8 @@ namespace quarkx
             const int r = transport.recv(temp, chunk);
             if (r <= 0)
             {
-              break;
+              QX_LOGD("Failed draining body");
+              return false;
             }
             drained += static_cast<size_t>(r);
           }
@@ -1017,11 +1080,13 @@ namespace quarkx
       while (served < QUARKX_MAX_REQ_PER_CONN && cont)
       {
         const bool allow = (served + 1 < QUARKX_MAX_REQ_PER_CONN);
-        cont = process_request(transport, stream, allow);
+        cont = process_request(transport, stream, allow,
+                               served ? QUARKX_KEEPALIVE_MS
+                                      : QUARKX_RECV_TIMEOUT_MS);
         ++served;
       }
 #else
-      process_request(transport, stream, false);
+      process_request(transport, stream, false, QUARKX_RECV_TIMEOUT_MS);
 #endif
       transport.shutdown();
       return;
@@ -1036,11 +1101,13 @@ namespace quarkx
     while (served < QUARKX_MAX_REQ_PER_CONN && cont)
     {
       const bool allow = (served + 1 < QUARKX_MAX_REQ_PER_CONN);
-      cont = process_request(transport, stream, allow);
+      cont = process_request(transport, stream, allow,
+                             served ? QUARKX_KEEPALIVE_MS
+                                    : QUARKX_RECV_TIMEOUT_MS);
       ++served;
     }
 #else
-    process_request(transport, stream, false);
+    process_request(transport, stream, false, QUARKX_RECV_TIMEOUT_MS);
 #endif
   }
 
