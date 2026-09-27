@@ -39,6 +39,9 @@ namespace testnet
       ::close(fd);
       return -1;
     }
+    // Give the kernel time to move the connection to the accept queue so a
+    // single non-blocking accept() in poll() is guaranteed to see it.
+    ::usleep(20 * 1000);
     return fd;
   }
 
