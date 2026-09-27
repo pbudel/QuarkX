@@ -1,6 +1,6 @@
 {
   "name": "QuarkX",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "Minimal HTTP/HTTPS server for ESP32-class boards with Arduino framework.",
   "keywords": [
     "http",
