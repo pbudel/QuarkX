@@ -469,6 +469,45 @@ namespace quarkx
       bool _idleAdjusted;
     };
 
+    // True if the comma-separated header `value` contains `token`,
+    // compared case-insensitively (e.g. "Upgrade, Keep-Alive").
+    bool has_token(const char *value, const char *token)
+    {
+      const std::size_t token_len = std::strlen(token);
+      const char *p = value;
+      while (*p)
+      {
+        while (*p == ' ' || *p == '\t' || *p == ',')
+        {
+          ++p;
+        }
+        const char *begin = p;
+        while (*p && *p != ',')
+        {
+          ++p;
+        }
+        const char *end = p;
+        while (end > begin && (end[-1] == ' ' || end[-1] == '\t'))
+        {
+          --end;
+        }
+        if (static_cast<std::size_t>(end - begin) == token_len)
+        {
+          std::size_t i = 0;
+          while (i < token_len &&
+                 std::tolower(static_cast<unsigned char>(begin[i])) == token[i])
+          {
+            ++i;
+          }
+          if (i == token_len)
+          {
+            return true;
+          }
+        }
+      }
+      return false;
+    }
+
     int close_socket(int fd)
     {
       return ::close(fd);
@@ -498,6 +537,7 @@ namespace quarkx
   } // namespace detail
 
   using detail::close_socket;
+  using detail::has_token;
   using detail::g_active_server;
   using detail::PlainTransport;
   using detail::receive_exact;
@@ -540,6 +580,7 @@ namespace quarkx
     }
 #if QUARKX_KEEP_ALIVE
     _currentKeepAlive = false;
+    _responseKeepAlive = false;
 #endif
   }
 
@@ -1019,26 +1060,15 @@ namespace quarkx
       if (allow_keep)
       {
         const char *conn_hdr = get_header(headers, "connection");
-        if (conn_hdr)
-        {
-          const char target[] = "keep-alive";
-          std::size_t i = 0;
-          for (; target[i] && conn_hdr[i]; ++i)
-          {
-            if (std::tolower(static_cast<unsigned char>(conn_hdr[i])) != target[i])
-            {
-              break;
-            }
-          }
-          if (!target[i] && conn_hdr[i] == '\0')
-          {
-            next_keep = true;
-          }
-        }
+        next_keep = conn_hdr && has_token(conn_hdr, "keep-alive") &&
+                    !has_token(conn_hdr, "close");
       }
       _currentKeepAlive = next_keep;
 #endif
 
+#if QUARKX_KEEP_ALIVE
+      _responseKeepAlive = false;
+#endif
       if (handler)
       {
         ScopedServerBody guard(this);
@@ -1052,8 +1082,11 @@ namespace quarkx
       QX_LOGD("Finished handling %s %s", method.c_str(), path.c_str());
 
 #if QUARKX_KEEP_ALIVE
-      bool keep_loop = _currentKeepAlive;
+      // Only keep the connection if the response actually told the client
+      // so; handlers writing their own headers typically send `close`.
+      const bool keep_loop = _currentKeepAlive && _responseKeepAlive;
       _currentKeepAlive = false;
+      _responseKeepAlive = false;
       return keep_loop;
 #else
       (void)allow_keep;
@@ -1149,6 +1182,10 @@ namespace quarkx
     out.print(static_cast<unsigned>(body.length()));
 #if QUARKX_KEEP_ALIVE
     bool keep = g_active_server && g_active_server->_currentKeepAlive;
+    if (g_active_server)
+    {
+      g_active_server->_responseKeepAlive = keep;
+    }
     out.print(F("\r\nContent-Type: text/plain\r\nConnection: "));
     out.print(keep ? F("keep-alive") : F("close"));
     out.print(F("\r\n"));

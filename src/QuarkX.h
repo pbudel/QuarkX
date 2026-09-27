@@ -188,6 +188,7 @@ namespace quarkx
     BodyState _body;
 #if QUARKX_KEEP_ALIVE
     bool _currentKeepAlive;
+    bool _responseKeepAlive;
 #endif
 #if QUARKX_ENABLE_TLS
     struct TlsContext
