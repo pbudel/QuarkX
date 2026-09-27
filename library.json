@@ -27,5 +27,16 @@
   },
   "examples": [
     "../../examples/PostJson"
-  ]
+  ],
+  "export": {
+    "exclude": [
+      "test",
+      "platformio.ini",
+      ".pio",
+      ".python-version",
+      "task_plan.md",
+      "findings.md",
+      "progress.md"
+    ]
+  }
 }

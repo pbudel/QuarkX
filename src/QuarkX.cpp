@@ -853,7 +853,7 @@ namespace quarkx
       return false;
     }
     *method_end = '\0';
-    const char *path_begin = method_end + 1;
+    char *path_begin = method_end + 1;
     char *path_end = std::strchr(path_begin, ' ');
     if (!path_end)
     {
