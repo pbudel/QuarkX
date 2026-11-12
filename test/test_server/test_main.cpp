@@ -2,6 +2,7 @@
 #include <unity.h>
 
 #include <csignal>
+#include <string>
 
 #include "test_net.h"
 
@@ -128,6 +129,59 @@ void test_client_not_reading_response_does_not_block_poll()
   TEST_ASSERT_LESS_THAN_UINT32(4000, elapsed);
 }
 
+namespace
+{
+  std::string g_seen_origin;
+  std::string g_seen_host;
+  bool g_origin_was_null = false;
+
+  void echo_headers_handler(Stream &out, const String &, const String &)
+  {
+    const char *origin = quarkx::request_header("Origin");
+    const char *host = quarkx::request_header("HOST");
+    g_origin_was_null = (origin == nullptr);
+    g_seen_origin = origin ? origin : "";
+    g_seen_host = host ? host : "";
+    quarkx::send_basic_response(out, 200, F("OK"), F("ok"));
+  }
+
+  void serve_once(const char *request)
+  {
+    const int client = testnet::connect_loopback(kPort);
+    TEST_ASSERT_GREATER_OR_EQUAL(0, client);
+    testnet::send_all(client, request);
+    ::shutdown(client, SHUT_WR);
+    g_server->poll();
+    testnet::recv_all(client);
+    ::close(client);
+  }
+} // namespace
+
+// Handlers can read request headers by case-insensitive name.
+void test_request_header_returns_sent_value()
+{
+  g_server->on("/h", echo_headers_handler);
+  serve_once("POST /h HTTP/1.1\r\nHost: 192.168.1.1\r\n"
+             "Origin: https://evil.example\r\nContent-Length: 0\r\n\r\n");
+  TEST_ASSERT_FALSE(g_origin_was_null);
+  TEST_ASSERT_EQUAL_STRING("https://evil.example", g_seen_origin.c_str());
+  TEST_ASSERT_EQUAL_STRING("192.168.1.1", g_seen_host.c_str());
+}
+
+void test_request_header_absent_is_null()
+{
+  g_server->on("/h", echo_headers_handler);
+  serve_once("POST /h HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\n\r\n");
+  TEST_ASSERT_TRUE(g_origin_was_null);
+}
+
+void test_request_header_outside_handler_is_null()
+{
+  TEST_ASSERT_NULL(quarkx::request_header("Host"));
+  serve_once("GET / HTTP/1.1\r\nHost: x\r\n\r\n");
+  TEST_ASSERT_NULL(quarkx::request_header("Host"));
+}
+
 int main()
 {
   std::signal(SIGPIPE, SIG_IGN);
@@ -137,5 +191,8 @@ int main()
   RUN_TEST(test_client_stalling_mid_headers_does_not_block_poll);
   RUN_TEST(test_next_client_served_after_silent_one);
   RUN_TEST(test_client_not_reading_response_does_not_block_poll);
+  RUN_TEST(test_request_header_returns_sent_value);
+  RUN_TEST(test_request_header_absent_is_null);
+  RUN_TEST(test_request_header_outside_handler_is_null);
   return UNITY_END();
 }

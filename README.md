@@ -91,7 +91,26 @@ build_flags =
 - **PEM**: pass `cert_is_pem = true` (default) and `key_is_pem = true`. Ensure the buffers are null-terminated.
 - **DER**: pass raw DER bytes and set `cert_is_pem = false`, `key_is_pem = false`. Useful when storing credentials in LittleFS.
 
+The HTTPS server accepts TLS 1.2 or later and only forward-secret AES-GCM cipher suites (ECDHE-ECDSA and ECDHE-RSA; TLS 1.3 AES-GCM suites when mbedTLS is built with TLS 1.3). Suites that do not match the certificate's key type are not offered, so an ECDSA certificate negotiates only ECDHE-ECDSA suites.
+
 You may load credentials from LittleFS, SPIFFS, PROGMEM, or embed them in code. When TLS is enabled, provide credentials before calling `Server::begin()`; without them `begin()` fails. The `DualHttpHttps` example shows how to fall back to the mbedTLS test certificate for development.
+
+## Request Headers
+
+Inside a handler, `quarkx::request_header(name)` returns the value of a request header (name matched case-insensitively), or `nullptr` when the header is absent or when called outside a handler. The pointer is valid until the handler returns. A request with more than `QUARKX_HEADER_MAX_COUNT` headers, or with a header value of `QUARKX_HDR_VALUE_MAX` characters or more, is dropped before the handler runs.
+
+For example, to reject cross-site form posts:
+
+```cpp
+srv.on("/save", [](Stream& out, const String& method, const String&) {
+  const char* origin = quarkx::request_header("Origin");
+  if (method != "POST" || !origin || strcmp(origin, "https://192.168.4.1") != 0) {
+    quarkx::send_basic_response(out, 403, F("Forbidden"), F("Forbidden"));
+    return;
+  }
+  // ... handle the post ...
+});
+```
 
 ## Keep-Alive Behavior
 

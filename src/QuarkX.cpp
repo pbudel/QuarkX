@@ -50,6 +50,8 @@
 #include <mbedtls/net_sockets.h>
 #include <mbedtls/pk.h>
 #include <mbedtls/ssl.h>
+#include <mbedtls/ssl_ciphersuites.h>
+#include <mbedtls/version.h>
 #include <mbedtls/x509_crt.h>
 #endif
 
@@ -687,6 +689,27 @@ namespace quarkx
       return false;
     }
 
+    // TLS 1.2 or later, forward-secret AEAD suites only. mbedTLS keeps the
+    // pointer, so the list must outlive the config. Suites that do not match
+    // the loaded certificate's key type are skipped during the handshake.
+    static const int kCiphersuites[] = {
+#if defined(MBEDTLS_SSL_PROTO_TLS1_3)
+        MBEDTLS_TLS1_3_AES_128_GCM_SHA256,
+        MBEDTLS_TLS1_3_AES_256_GCM_SHA384,
+#endif
+        MBEDTLS_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+        MBEDTLS_TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+        MBEDTLS_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+        MBEDTLS_TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+        0};
+#if MBEDTLS_VERSION_NUMBER >= 0x03000000
+    mbedtls_ssl_conf_min_tls_version(&_tlsCtx->conf, MBEDTLS_SSL_VERSION_TLS1_2);
+#else
+    mbedtls_ssl_conf_min_version(&_tlsCtx->conf, MBEDTLS_SSL_MAJOR_VERSION_3,
+                                 MBEDTLS_SSL_MINOR_VERSION_3);
+#endif
+    mbedtls_ssl_conf_ciphersuites(&_tlsCtx->conf, kCiphersuites);
+
     mbedtls_ssl_conf_rng(&_tlsCtx->conf, mbedtls_ctr_drbg_random,
                          &_tlsCtx->ctr_drbg);
     mbedtls_ssl_conf_authmode(&_tlsCtx->conf, MBEDTLS_SSL_VERIFY_NONE);
@@ -1072,7 +1095,9 @@ namespace quarkx
       if (handler)
       {
         ScopedServerBody guard(this);
+        _currentHeaders = &headers;
         handler(stream, method, path);
+        _currentHeaders = nullptr;
       }
       else
       {
@@ -1170,6 +1195,15 @@ namespace quarkx
     return g_active_server->_readBody(buf, max);
   }
 
+  const char *request_header(const char *name)
+  {
+    if (!g_active_server || !g_active_server->_currentHeaders || !name)
+    {
+      return nullptr;
+    }
+    return get_header(*g_active_server->_currentHeaders, name);
+  }
+
   void send_basic_response(Stream &out, int code,
                            const __FlashStringHelper *status,
                            const String &body)
@@ -1186,7 +1220,8 @@ namespace quarkx
     {
       g_active_server->_responseKeepAlive = keep;
     }
-    out.print(F("\r\nContent-Type: text/plain\r\nConnection: "));
+    out.print(F("\r\nContent-Type: text/plain"
+                "\r\nX-Content-Type-Options: nosniff\r\nConnection: "));
     out.print(keep ? F("keep-alive") : F("close"));
     out.print(F("\r\n"));
     if (keep)
@@ -1199,7 +1234,8 @@ namespace quarkx
     }
     out.print(F("\r\n"));
 #else
-    out.print(F("\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n"));
+    out.print(F("\r\nContent-Type: text/plain"
+                "\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n"));
 #endif
     out.print(body);
   }

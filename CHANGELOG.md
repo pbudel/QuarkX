@@ -20,8 +20,18 @@
 - Build fixes: request-line parser const-correctness (strict C++ standard
   libraries) and missing includes in the `DualHttpHttps` example.
 
+### Security
+
+- HTTPS server: TLS 1.2 minimum and forward-secret AES-GCM cipher suites
+  only (ECDHE-ECDSA / ECDHE-RSA). TLS 1.0/1.1, CBC suites and static-ECDH
+  suites are no longer negotiated. Clients limited to those cannot connect.
+- Responses written by `send_basic_response()` carry
+  `X-Content-Type-Options: nosniff`.
+
 ### Added
 
+- `request_header(name)`: handlers can read any header of the current
+  request (case-insensitive name; `nullptr` if absent or outside a handler).
 - `QUARKX_REQUEST_TIMEOUT_MS` (default `10000`): once a request has started,
   its line, headers and body must arrive within this time. Requests whose
   body cannot be read or drained in time are dropped without calling the
