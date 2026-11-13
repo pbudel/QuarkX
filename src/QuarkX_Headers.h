@@ -35,6 +35,8 @@ namespace quarkx
 #define QUARKX_HDR_LINE_MAX 512
 #endif
 
+// Not used by the library; kept so existing -D overrides still compile.
+// See QUARKX_REQUEST_TIMEOUT_MS in QuarkX.h.
 #ifndef QUARKX_HDR_TIMEOUT_MS
 #define QUARKX_HDR_TIMEOUT_MS 4000
 #endif
@@ -48,7 +50,7 @@ namespace quarkx
 #endif
 
 #ifndef QUARKX_HEADER_MAX_COUNT
-#define QUARKX_HEADER_MAX_COUNT 16
+#define QUARKX_HEADER_MAX_COUNT 24
 #endif
 
   struct Header

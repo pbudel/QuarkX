@@ -50,6 +50,8 @@
 #include <mbedtls/net_sockets.h>
 #include <mbedtls/pk.h>
 #include <mbedtls/ssl.h>
+#include <mbedtls/ssl_ciphersuites.h>
+#include <mbedtls/version.h>
 #include <mbedtls/x509_crt.h>
 #endif
 
@@ -102,6 +104,33 @@ namespace quarkx
     }
 #endif
 
+    // Client sockets are blocking with SO_RCVTIMEO/SO_SNDTIMEO set, so an
+    // EAGAIN/EWOULDBLOCK result means the timeout expired: callers must give
+    // up rather than retry, or a silent peer blocks the server forever.
+    inline bool is_timeout_errno(int err)
+    {
+#if defined(EWOULDBLOCK)
+      return err == EAGAIN || err == EWOULDBLOCK;
+#else
+      return err == EAGAIN;
+#endif
+    }
+
+    // Wall-clock budget for loops that retry without blocking. Unsigned
+    // subtraction keeps it correct across millis() rollover.
+    class Deadline
+    {
+    public:
+      explicit Deadline(unsigned long budget_ms)
+          : _start(millis()), _budget(budget_ms) {}
+
+      bool expired() const { return millis() - _start >= _budget; }
+
+    private:
+      unsigned long _start;
+      unsigned long _budget;
+    };
+
     class PlainTransport : public Transport
     {
     public:
@@ -111,62 +140,24 @@ namespace quarkx
 
       int recv(uint8_t *buf, size_t len) override
       {
-        while (true)
+        int ret;
+        do
         {
-          const int ret = ::recv(_fd, reinterpret_cast<char *>(buf),
-                                 static_cast<int>(len), 0);
-          if (ret < 0)
-          {
-            if (errno == EINTR)
-            {
-              continue;
-            }
-#if defined(EWOULDBLOCK)
-            if (errno == EAGAIN || errno == EWOULDBLOCK)
-            {
-              delay(1);
-              continue;
-            }
-#else
-            if (errno == EAGAIN)
-            {
-              delay(1);
-              continue;
-            }
-#endif
-          }
-          return ret;
-        }
+          ret = ::recv(_fd, reinterpret_cast<char *>(buf),
+                       static_cast<int>(len), 0);
+        } while (ret < 0 && errno == EINTR);
+        return ret;
       }
 
       int send(const uint8_t *buf, size_t len) override
       {
-        while (true)
+        int ret;
+        do
         {
-          const int ret = ::send(_fd, reinterpret_cast<const char *>(buf),
-                                 static_cast<int>(len), 0);
-          if (ret < 0)
-          {
-            if (errno == EINTR)
-            {
-              continue;
-            }
-#if defined(EWOULDBLOCK)
-            if (errno == EAGAIN || errno == EWOULDBLOCK)
-            {
-              delay(1);
-              continue;
-            }
-#else
-            if (errno == EAGAIN)
-            {
-              delay(1);
-              continue;
-            }
-#endif
-          }
-          return ret;
-        }
+          ret = ::send(_fd, reinterpret_cast<const char *>(buf),
+                       static_cast<int>(len), 0);
+        } while (ret < 0 && errno == EINTR);
+        return ret;
       }
 
     private:
@@ -199,11 +190,15 @@ namespace quarkx
             [](void *ctx, const unsigned char *buf, size_t len)
             {
               auto *self = static_cast<TlsTransport *>(ctx);
-              const int res = ::send(self->_fd, reinterpret_cast<const char *>(buf),
-                                     static_cast<int>(len), 0);
-              if (res < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+              int res;
+              do
               {
-                return MBEDTLS_ERR_SSL_WANT_WRITE;
+                res = ::send(self->_fd, reinterpret_cast<const char *>(buf),
+                             static_cast<int>(len), 0);
+              } while (res < 0 && errno == EINTR);
+              if (res < 0 && is_timeout_errno(errno))
+              {
+                return MBEDTLS_ERR_SSL_TIMEOUT;
               }
               if (res < 0)
               {
@@ -214,11 +209,15 @@ namespace quarkx
             [](void *ctx, unsigned char *buf, size_t len)
             {
               auto *self = static_cast<TlsTransport *>(ctx);
-              const int res = ::recv(self->_fd, reinterpret_cast<char *>(buf),
-                                     static_cast<int>(len), 0);
-              if (res < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+              int res;
+              do
               {
-                return MBEDTLS_ERR_SSL_WANT_READ;
+                res = ::recv(self->_fd, reinterpret_cast<char *>(buf),
+                             static_cast<int>(len), 0);
+              } while (res < 0 && errno == EINTR);
+              if (res < 0 && is_timeout_errno(errno))
+              {
+                return MBEDTLS_ERR_SSL_TIMEOUT;
               }
               if (res < 0)
               {
@@ -228,11 +227,13 @@ namespace quarkx
             },
             nullptr);
 
+        const Deadline deadline(QUARKX_RECV_TIMEOUT_MS);
         do
         {
           ret = mbedtls_ssl_handshake(&_ssl);
-        } while (ret == MBEDTLS_ERR_SSL_WANT_READ ||
-                 ret == MBEDTLS_ERR_SSL_WANT_WRITE);
+        } while ((ret == MBEDTLS_ERR_SSL_WANT_READ ||
+                  ret == MBEDTLS_ERR_SSL_WANT_WRITE) &&
+                 !deadline.expired());
 
         if (ret != 0)
         {
@@ -244,6 +245,7 @@ namespace quarkx
 
       int recv(uint8_t *buf, size_t len) override
       {
+        const Deadline deadline(QUARKX_RECV_TIMEOUT_MS);
         while (true)
         {
           const int ret = mbedtls_ssl_read(&_ssl, buf, static_cast<int>(len));
@@ -251,8 +253,9 @@ namespace quarkx
           {
             return ret;
           }
-          if (ret == MBEDTLS_ERR_SSL_WANT_READ ||
-              ret == MBEDTLS_ERR_SSL_WANT_WRITE)
+          if ((ret == MBEDTLS_ERR_SSL_WANT_READ ||
+               ret == MBEDTLS_ERR_SSL_WANT_WRITE) &&
+              !deadline.expired())
           {
             delay(1);
             continue;
@@ -269,6 +272,7 @@ namespace quarkx
       int send(const uint8_t *buf, size_t len) override
       {
         size_t sent = 0;
+        Deadline deadline(QUARKX_RECV_TIMEOUT_MS);
         while (sent < len)
         {
           const int ret =
@@ -276,10 +280,12 @@ namespace quarkx
           if (ret > 0)
           {
             sent += static_cast<size_t>(ret);
+            deadline = Deadline(QUARKX_RECV_TIMEOUT_MS);
             continue;
           }
-          if (ret == MBEDTLS_ERR_SSL_WANT_READ ||
-              ret == MBEDTLS_ERR_SSL_WANT_WRITE)
+          if ((ret == MBEDTLS_ERR_SSL_WANT_READ ||
+               ret == MBEDTLS_ERR_SSL_WANT_WRITE) &&
+              !deadline.expired())
           {
             delay(1);
             continue;
@@ -406,6 +412,104 @@ namespace quarkx
              ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)) == 0;
     }
 
+    // Bounds the reading of one request. Waiting for its first byte is
+    // limited by the socket timeout (`idle_ms`); once it has started, the
+    // request line, headers and body must all arrive within
+    // QUARKX_REQUEST_TIMEOUT_MS, so a client trickling bytes cannot hold the
+    // server indefinitely.
+    class RequestReader : public Transport
+    {
+    public:
+      RequestReader(Transport &inner, int fd, int idle_ms)
+          : _inner(inner), _fd(fd), _deadline(QUARKX_REQUEST_TIMEOUT_MS),
+            _started(false), _idleAdjusted(idle_ms != QUARKX_RECV_TIMEOUT_MS)
+      {
+        if (_idleAdjusted)
+        {
+          set_socket_timeout(_fd, idle_ms);
+        }
+      }
+
+      ~RequestReader() override { _restoreTimeout(); }
+
+      int recv(uint8_t *buf, size_t len) override
+      {
+        if (_started && _deadline.expired())
+        {
+          QX_LOGD("Request not received within %d ms", QUARKX_REQUEST_TIMEOUT_MS);
+          return -1;
+        }
+        const int ret = _inner.recv(buf, len);
+        if (ret > 0 && !_started)
+        {
+          _started = true;
+          _deadline = Deadline(QUARKX_REQUEST_TIMEOUT_MS);
+          _restoreTimeout();
+        }
+        return ret;
+      }
+
+      int send(const uint8_t *buf, size_t len) override
+      {
+        return _inner.send(buf, len);
+      }
+
+    private:
+      void _restoreTimeout()
+      {
+        if (_idleAdjusted)
+        {
+          set_socket_timeout(_fd, QUARKX_RECV_TIMEOUT_MS);
+          _idleAdjusted = false;
+        }
+      }
+
+      Transport &_inner;
+      int _fd;
+      Deadline _deadline;
+      bool _started;
+      bool _idleAdjusted;
+    };
+
+    // True if the comma-separated header `value` contains `token`,
+    // compared case-insensitively (e.g. "Upgrade, Keep-Alive").
+    bool has_token(const char *value, const char *token)
+    {
+      const std::size_t token_len = std::strlen(token);
+      const char *p = value;
+      while (*p)
+      {
+        while (*p == ' ' || *p == '\t' || *p == ',')
+        {
+          ++p;
+        }
+        const char *begin = p;
+        while (*p && *p != ',')
+        {
+          ++p;
+        }
+        const char *end = p;
+        while (end > begin && (end[-1] == ' ' || end[-1] == '\t'))
+        {
+          --end;
+        }
+        if (static_cast<std::size_t>(end - begin) == token_len)
+        {
+          std::size_t i = 0;
+          while (i < token_len &&
+                 std::tolower(static_cast<unsigned char>(begin[i])) == token[i])
+          {
+            ++i;
+          }
+          if (i == token_len)
+          {
+            return true;
+          }
+        }
+      }
+      return false;
+    }
+
     int close_socket(int fd)
     {
       return ::close(fd);
@@ -435,9 +539,11 @@ namespace quarkx
   } // namespace detail
 
   using detail::close_socket;
+  using detail::has_token;
   using detail::g_active_server;
   using detail::PlainTransport;
   using detail::receive_exact;
+  using detail::RequestReader;
   using detail::ScopedServerBody;
   using detail::set_socket_blocking;
   using detail::set_socket_nonblock;
@@ -476,6 +582,7 @@ namespace quarkx
     }
 #if QUARKX_KEEP_ALIVE
     _currentKeepAlive = false;
+    _responseKeepAlive = false;
 #endif
   }
 
@@ -581,6 +688,27 @@ namespace quarkx
       log_mbedtls_error("mbedtls_ssl_config_defaults", cfg_ret);
       return false;
     }
+
+    // TLS 1.2 or later, forward-secret AEAD suites only. mbedTLS keeps the
+    // pointer, so the list must outlive the config. Suites that do not match
+    // the loaded certificate's key type are skipped during the handshake.
+    static const int kCiphersuites[] = {
+#if defined(MBEDTLS_SSL_PROTO_TLS1_3)
+        MBEDTLS_TLS1_3_AES_128_GCM_SHA256,
+        MBEDTLS_TLS1_3_AES_256_GCM_SHA384,
+#endif
+        MBEDTLS_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+        MBEDTLS_TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+        MBEDTLS_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+        MBEDTLS_TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+        0};
+#if MBEDTLS_VERSION_NUMBER >= 0x03000000
+    mbedtls_ssl_conf_min_tls_version(&_tlsCtx->conf, MBEDTLS_SSL_VERSION_TLS1_2);
+#else
+    mbedtls_ssl_conf_min_version(&_tlsCtx->conf, MBEDTLS_SSL_MAJOR_VERSION_3,
+                                 MBEDTLS_SSL_MINOR_VERSION_3);
+#endif
+    mbedtls_ssl_conf_ciphersuites(&_tlsCtx->conf, kCiphersuites);
 
     mbedtls_ssl_conf_rng(&_tlsCtx->conf, mbedtls_ctr_drbg_random,
                          &_tlsCtx->ctr_drbg);
@@ -742,13 +870,19 @@ namespace quarkx
       return;
     }
 
+    // Without a blocking socket and a timeout, a silent client could stall
+    // this call indefinitely, so such connections are refused.
     if (!set_socket_blocking(client_fd))
     {
       QX_LOGE("failed to switch client socket to blocking mode");
+      close_socket(client_fd);
+      return;
     }
     if (!set_socket_timeout(client_fd, QUARKX_RECV_TIMEOUT_MS))
     {
       QX_LOGE("failed to set socket timeout");
+      close_socket(client_fd);
+      return;
     }
 
     _serveClient(client_fd);
@@ -853,7 +987,7 @@ namespace quarkx
       return false;
     }
     *method_end = '\0';
-    const char *path_begin = method_end + 1;
+    char *path_begin = method_end + 1;
     char *path_end = std::strchr(path_begin, ' ');
     if (!path_end)
     {
@@ -875,9 +1009,10 @@ namespace quarkx
 
   void Server::_serveClient(int client_fd)
   {
-    auto process_request = [&](Transport &transport, detail::StreamWrapper &stream,
-                               bool allow_keep) -> bool
+    auto process_request = [&](Transport &conn, detail::StreamWrapper &stream,
+                               bool allow_keep, int idle_ms) -> bool
     {
+      RequestReader transport(conn, client_fd, idle_ms);
       String method;
       String path;
       if (!_readRequestLine(transport, method, path))
@@ -913,6 +1048,7 @@ namespace quarkx
           else
           {
             QX_LOGD("Failed reading body");
+            return false;
           }
         }
         else if (len > QUARKX_MAX_BODY)
@@ -928,7 +1064,8 @@ namespace quarkx
             const int r = transport.recv(temp, chunk);
             if (r <= 0)
             {
-              break;
+              QX_LOGD("Failed draining body");
+              return false;
             }
             drained += static_cast<size_t>(r);
           }
@@ -946,30 +1083,21 @@ namespace quarkx
       if (allow_keep)
       {
         const char *conn_hdr = get_header(headers, "connection");
-        if (conn_hdr)
-        {
-          const char target[] = "keep-alive";
-          std::size_t i = 0;
-          for (; target[i] && conn_hdr[i]; ++i)
-          {
-            if (std::tolower(static_cast<unsigned char>(conn_hdr[i])) != target[i])
-            {
-              break;
-            }
-          }
-          if (!target[i] && conn_hdr[i] == '\0')
-          {
-            next_keep = true;
-          }
-        }
+        next_keep = conn_hdr && has_token(conn_hdr, "keep-alive") &&
+                    !has_token(conn_hdr, "close");
       }
       _currentKeepAlive = next_keep;
 #endif
 
+#if QUARKX_KEEP_ALIVE
+      _responseKeepAlive = false;
+#endif
       if (handler)
       {
         ScopedServerBody guard(this);
+        _currentHeaders = &headers;
         handler(stream, method, path);
+        _currentHeaders = nullptr;
       }
       else
       {
@@ -979,8 +1107,11 @@ namespace quarkx
       QX_LOGD("Finished handling %s %s", method.c_str(), path.c_str());
 
 #if QUARKX_KEEP_ALIVE
-      bool keep_loop = _currentKeepAlive;
+      // Only keep the connection if the response actually told the client
+      // so; handlers writing their own headers typically send `close`.
+      const bool keep_loop = _currentKeepAlive && _responseKeepAlive;
       _currentKeepAlive = false;
+      _responseKeepAlive = false;
       return keep_loop;
 #else
       (void)allow_keep;
@@ -1007,11 +1138,13 @@ namespace quarkx
       while (served < QUARKX_MAX_REQ_PER_CONN && cont)
       {
         const bool allow = (served + 1 < QUARKX_MAX_REQ_PER_CONN);
-        cont = process_request(transport, stream, allow);
+        cont = process_request(transport, stream, allow,
+                               served ? QUARKX_KEEPALIVE_MS
+                                      : QUARKX_RECV_TIMEOUT_MS);
         ++served;
       }
 #else
-      process_request(transport, stream, false);
+      process_request(transport, stream, false, QUARKX_RECV_TIMEOUT_MS);
 #endif
       transport.shutdown();
       return;
@@ -1026,11 +1159,13 @@ namespace quarkx
     while (served < QUARKX_MAX_REQ_PER_CONN && cont)
     {
       const bool allow = (served + 1 < QUARKX_MAX_REQ_PER_CONN);
-      cont = process_request(transport, stream, allow);
+      cont = process_request(transport, stream, allow,
+                             served ? QUARKX_KEEPALIVE_MS
+                                    : QUARKX_RECV_TIMEOUT_MS);
       ++served;
     }
 #else
-    process_request(transport, stream, false);
+    process_request(transport, stream, false, QUARKX_RECV_TIMEOUT_MS);
 #endif
   }
 
@@ -1060,6 +1195,15 @@ namespace quarkx
     return g_active_server->_readBody(buf, max);
   }
 
+  const char *request_header(const char *name)
+  {
+    if (!g_active_server || !g_active_server->_currentHeaders || !name)
+    {
+      return nullptr;
+    }
+    return get_header(*g_active_server->_currentHeaders, name);
+  }
+
   void send_basic_response(Stream &out, int code,
                            const __FlashStringHelper *status,
                            const String &body)
@@ -1072,7 +1216,12 @@ namespace quarkx
     out.print(static_cast<unsigned>(body.length()));
 #if QUARKX_KEEP_ALIVE
     bool keep = g_active_server && g_active_server->_currentKeepAlive;
-    out.print(F("\r\nContent-Type: text/plain\r\nConnection: "));
+    if (g_active_server)
+    {
+      g_active_server->_responseKeepAlive = keep;
+    }
+    out.print(F("\r\nContent-Type: text/plain"
+                "\r\nX-Content-Type-Options: nosniff\r\nConnection: "));
     out.print(keep ? F("keep-alive") : F("close"));
     out.print(F("\r\n"));
     if (keep)
@@ -1085,7 +1234,8 @@ namespace quarkx
     }
     out.print(F("\r\n"));
 #else
-    out.print(F("\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n"));
+    out.print(F("\r\nContent-Type: text/plain"
+                "\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n"));
 #endif
     out.print(body);
   }

@@ -1,6 +1,6 @@
 {
   "name": "QuarkX",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "Minimal HTTP/HTTPS server for ESP32-class boards with Arduino framework.",
   "keywords": [
     "http",
@@ -26,6 +26,17 @@
     "srcDir": "src"
   },
   "examples": [
-    "../../examples/PostJson"
-  ]
+    "examples/*/*.ino"
+  ],
+  "export": {
+    "exclude": [
+      "test",
+      "platformio.ini",
+      ".pio",
+      ".python-version",
+      "task_plan.md",
+      "findings.md",
+      "progress.md"
+    ]
+  }
 }

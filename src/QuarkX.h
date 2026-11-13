@@ -83,6 +83,10 @@
 #define QUARKX_RECV_TIMEOUT_MS 5000
 #endif
 
+#ifndef QUARKX_REQUEST_TIMEOUT_MS
+#define QUARKX_REQUEST_TIMEOUT_MS 10000
+#endif
+
 #ifndef QUARKX_LOG_LEVEL
 #define QUARKX_LOG_LEVEL 0
 #endif
@@ -124,6 +128,16 @@ namespace quarkx
    * @return Number of bytes copied (0 if body unavailable or fully consumed).
    */
   size_t read_body(uint8_t *buf, size_t max);
+
+  /**
+   * @brief Value of a header of the request being handled.
+   * @param name Header name, matched case-insensitively.
+   * @return Pointer valid until the handler returns, or nullptr if the header
+   *         is absent or no request is being handled.
+   */
+  const char *request_header(const char *name);
+
+  struct HeaderTable;
 
   class Server
   {
@@ -182,8 +196,10 @@ namespace quarkx
     int _listenFd;
     bool _listening;
     BodyState _body;
+    const HeaderTable *_currentHeaders = nullptr;
 #if QUARKX_KEEP_ALIVE
     bool _currentKeepAlive;
+    bool _responseKeepAlive;
 #endif
 #if QUARKX_ENABLE_TLS
     struct TlsContext
@@ -230,6 +246,7 @@ namespace quarkx
     size_t _readBody(uint8_t *buf, size_t max);
 
     friend size_t read_body(uint8_t *buf, size_t max);
+    friend const char *request_header(const char *name);
     friend void send_basic_response(Stream &out, int code,
                                     const __FlashStringHelper *status,
                                     const String &body);
