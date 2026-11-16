@@ -26,6 +26,7 @@
 #define QUARKX_QUARKX_H
 
 #include <Arduino.h>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -89,6 +90,12 @@
 
 #ifndef QUARKX_LOG_LEVEL
 #define QUARKX_LOG_LEVEL 0
+#endif
+
+// HTTPS only: abort the handshake of clients whose SNI names a host. Clients
+// that connect by IP address send no SNI and are served normally.
+#ifndef QUARKX_TLS_REJECT_SNI_HOSTNAMES
+#define QUARKX_TLS_REJECT_SNI_HOSTNAMES 0
 #endif
 
 namespace quarkx
@@ -166,6 +173,14 @@ namespace quarkx
 
     Handler route(const String &path) const;
 
+    /**
+     * @brief Handshakes aborted because the client's SNI named a host.
+     *
+     * Always 0 unless QUARKX_TLS_REJECT_SNI_HOSTNAMES is enabled. Safe to call
+     * from another task.
+     */
+    uint32_t rejectedSniHandshakes() const;
+
   private:
     struct RouteSlot
     {
@@ -197,6 +212,7 @@ namespace quarkx
     bool _listening;
     BodyState _body;
     const HeaderTable *_currentHeaders = nullptr;
+    std::atomic<uint32_t> _rejectedSniHandshakes{0};
 #if QUARKX_KEEP_ALIVE
     bool _currentKeepAlive;
     bool _responseKeepAlive;
@@ -210,6 +226,7 @@ namespace quarkx
       mbedtls_entropy_context entropy;
       mbedtls_x509_crt cert;
       mbedtls_pk_context key;
+      std::atomic<uint32_t> *sni_rejections = nullptr;
       std::vector<uint8_t> cert_cache;
       std::vector<uint8_t> key_cache;
 

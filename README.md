@@ -77,6 +77,7 @@ Every build-time option can be overridden with `-D` flags in `platformio.ini` or
 | `QUARKX_ROUTE_MAX` | `8` | Number of exact-match route slots. |
 | `QUARKX_PREFIX_MAX` | `4` | Number of prefix-route slots. |
 | `QUARKX_LOG_LEVEL` | `0` | Log level (`0`=silent, `1`=error, `2`=info, `3`=debug). |
+| `QUARKX_TLS_REJECT_SNI_HOSTNAMES` | `0` | Abort HTTPS handshakes whose SNI names a host (see [Rejecting Handshakes by SNI](#rejecting-handshakes-by-sni)). |
 
 Macros can be added before `#include <QuarkX.h>` or in your build system:
 
@@ -94,6 +95,17 @@ build_flags =
 The HTTPS server accepts TLS 1.2 or later and only forward-secret AES-GCM cipher suites (ECDHE-ECDSA and ECDHE-RSA; TLS 1.3 AES-GCM suites when mbedTLS is built with TLS 1.3). Suites that do not match the certificate's key type are not offered, so an ECDSA certificate negotiates only ECDHE-ECDSA suites.
 
 You may load credentials from LittleFS, SPIFFS, PROGMEM, or embed them in code. When TLS is enabled, provide credentials before calling `Server::begin()`; without them `begin()` fails. The `DualHttpHttps` example shows how to fall back to the mbedTLS test certificate for development.
+
+## Rejecting Handshakes by SNI
+
+A device that answers every DNS name with its own address (for example a captive portal) receives HTTPS connections from every app on the client that tries to reach the Internet. Each of those handshakes is bound to fail, yet costs the full key exchange and signature before the client gives up, while the single connection that `poll()` serves at a time is busy.
+
+With `-DQUARKX_TLS_REJECT_SNI_HOSTNAMES=1` the server aborts a handshake as soon as the ClientHello carries a Server Name Indication with a host name: mbedTLS answers with an `unrecognized_name` alert before any key exchange. Clients that connect by IP address (`https://192.168.4.1`) send no SNI, as RFC 6066 requires, and are served normally. A dotted IPv4 literal sent as SNI by a non-conforming client is also accepted.
+
+- Enable it only if the server is reached **by IP address**. A client that uses a host name for the server itself is rejected.
+- `Server::rejectedSniHandshakes()` returns how many handshakes were aborted this way; it can be read from another task. Rejections are not logged as errors; at `QUARKX_LOG_LEVEL=3` each one is logged with the requested name.
+- mbedTLS must be built with `MBEDTLS_SSL_SERVER_NAME_INDICATION` (it is in Arduino-ESP32); otherwise the build fails.
+- Known limit: with mbedTLS 3.x and TLS 1.3 enabled, some mbedTLS versions may not call the SNI callback on the TLS 1.3 server path, and those handshakes are not filtered. Arduino-ESP32 2.x ships mbedTLS 2.28 (no TLS 1.3) and is not affected.
 
 ## Request Headers
 

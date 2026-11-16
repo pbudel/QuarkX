@@ -182,6 +182,11 @@ void test_request_header_outside_handler_is_null()
   TEST_ASSERT_NULL(quarkx::request_header("Host"));
 }
 
+void test_rejected_sni_handshakes_starts_at_zero()
+{
+  TEST_ASSERT_EQUAL_UINT32(0, g_server->rejectedSniHandshakes());
+}
+
 int main()
 {
   std::signal(SIGPIPE, SIG_IGN);
@@ -194,5 +199,6 @@ int main()
   RUN_TEST(test_request_header_returns_sent_value);
   RUN_TEST(test_request_header_absent_is_null);
   RUN_TEST(test_request_header_outside_handler_is_null);
+  RUN_TEST(test_rejected_sni_handshakes_starts_at_zero);
   return UNITY_END();
 }
