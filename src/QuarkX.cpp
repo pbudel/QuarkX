@@ -25,6 +25,7 @@
 #include "QuarkX.h"
 
 #include "QuarkX_Headers.h"
+#include "QuarkX_Sni.h"
 
 #include <cstring>
 #include <cstdlib>
@@ -102,6 +103,38 @@ namespace quarkx
       mbedtls_strerror(code, buffer, sizeof(buffer));
       QX_LOGE("%s: %s (%d)", label, buffer, code);
     }
+
+#if QUARKX_TLS_REJECT_SNI_HOSTNAMES
+#if !defined(MBEDTLS_SSL_SERVER_NAME_INDICATION)
+#error "QUARKX_TLS_REJECT_SNI_HOSTNAMES requires MBEDTLS_SSL_SERVER_NAME_INDICATION"
+#endif
+    // Called by mbedTLS while it parses the ClientHello, before any key
+    // exchange or signature work. A non-zero return makes mbedTLS send an
+    // unrecognized_name alert and abort the handshake.
+    static int reject_sni_hostname(void *p, mbedtls_ssl_context *,
+                                   const unsigned char *name, size_t len)
+    {
+      if (!sni_is_hostname(name, len))
+      {
+        return 0;
+      }
+      static_cast<std::atomic<uint32_t> *>(p)->fetch_add(
+          1, std::memory_order_relaxed);
+#if QUARKX_LOG_LEVEL >= 3
+      char shown[65];
+      size_t n = len < sizeof(shown) - 1 ? len : sizeof(shown) - 1;
+      for (size_t i = 0; i < n; ++i)
+      {
+        shown[i] = (name[i] >= 0x20 && name[i] < 0x7f)
+                       ? static_cast<char>(name[i])
+                       : '?';
+      }
+      shown[n] = '\0';
+      QX_LOGD("TLS: rejected handshake for SNI '%s'", shown);
+#endif
+      return -1;
+    }
+#endif
 #endif
 
     // Client sockets are blocking with SO_RCVTIMEO/SO_SNDTIMEO set, so an
@@ -227,6 +260,8 @@ namespace quarkx
             },
             nullptr);
 
+        const uint32_t rejected_before =
+            _ctx.sni_rejections ? _ctx.sni_rejections->load() : 0;
         const Deadline deadline(QUARKX_RECV_TIMEOUT_MS);
         do
         {
@@ -237,7 +272,15 @@ namespace quarkx
 
         if (ret != 0)
         {
-          log_mbedtls_error("mbedtls_ssl_handshake", ret);
+          // SNI rejections are expected and counted; logging each one as an
+          // error would flood the log.
+          const bool sni_rejected =
+              _ctx.sni_rejections &&
+              _ctx.sni_rejections->load() != rejected_before;
+          if (!sni_rejected)
+          {
+            log_mbedtls_error("mbedtls_ssl_handshake", ret);
+          }
           return false;
         }
         return true;
@@ -714,6 +757,12 @@ namespace quarkx
                          &_tlsCtx->ctr_drbg);
     mbedtls_ssl_conf_authmode(&_tlsCtx->conf, MBEDTLS_SSL_VERIFY_NONE);
 
+#if QUARKX_TLS_REJECT_SNI_HOSTNAMES
+    _tlsCtx->sni_rejections = &_rejectedSniHandshakes;
+    mbedtls_ssl_conf_sni(&_tlsCtx->conf, detail::reject_sni_hostname,
+                         &_rejectedSniHandshakes);
+#endif
+
     cfg_ret =
         mbedtls_ssl_conf_own_cert(&_tlsCtx->conf, &_tlsCtx->cert, &_tlsCtx->key);
     if (cfg_ret != 0)
@@ -726,6 +775,11 @@ namespace quarkx
     return true;
   }
 #endif
+
+  uint32_t Server::rejectedSniHandshakes() const
+  {
+    return _rejectedSniHandshakes.load(std::memory_order_relaxed);
+  }
 
   void Server::on(const String &path, Handler handler)
   {

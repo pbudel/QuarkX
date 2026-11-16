@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.2.0
+
+### Added
+
+- `QUARKX_TLS_REJECT_SNI_HOSTNAMES` (default `0`): the HTTPS server aborts,
+  with an `unrecognized_name` alert and before any key exchange, handshakes
+  whose SNI names a host. Clients connecting by IP address send no SNI and
+  are served normally; IPv4 literals sent as SNI are accepted. Meant for
+  servers reached by IP behind a wildcard DNS, where every app on a client
+  otherwise costs a full, failing handshake.
+- `Server::rejectedSniHandshakes()`: number of handshakes aborted this way
+  (always `0` with the option off).
+
+### Changed
+
+- `Server` is no longer copyable or movable (it holds an atomic counter).
+  Copying a server, with its listening socket, was never meaningful.
+
 ## 1.1.0
 
 ### Fixed
